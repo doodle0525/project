@@ -1,3 +1,17 @@
+"""
+client.py - Interactive TCP Chat Client
+
+Academic Project: Secure Multi-Client Command-Line Chat Application
+Networking Module: Python socket (TCP) and threading
+
+Key Computer Networking Concepts:
+1. TCP Client Socket creation and 3-way handshake (sock.connect).
+2. Full-duplex communication using two concurrent threads:
+   - Main thread: Reads user input from terminal and sends messages.
+   - Background thread: Continuously listens for incoming TCP packets.
+3. Length-prefixed JSON application protocol (common.py).
+4. Direct message routing, delivery receipts, and seen acknowledgements.
+"""
 
 import socket
 import threading
@@ -10,10 +24,11 @@ import common
 import contacts
 
 DEFAULT_PORT = 8080
-last_typing_time = {}  
+last_typing_time = {}  # Anti-flood rate limiting for typing indicators
 
 
 def print_help():
+    """Displays available chat commands."""
     print("""
 Available Commands:
   /help                   Show this help message
@@ -32,6 +47,11 @@ Available Commands:
 
 
 def receive_thread(sock, running_flag, my_username):
+    """
+    Background worker thread:
+    Continuously receives length-prefixed JSON packets from the server,
+    unpacks them, and prints them to the terminal.
+    """
     while running_flag[0]:
         msg = common.recv_msg(sock)
         if msg is None:
@@ -66,17 +86,17 @@ def receive_thread(sock, running_flag, my_username):
             content = msg.get("content")
             msg_id = msg.get("msg_id")
 
-            
+            # Display received private message
             print(f"\n[Private from {sender}]: {content}")
 
-            
+            # Send immediate DELIVERED acknowledgment back to sender
             common.send_msg(sock, {
                 "type": common.MSG_DELIVERED,
                 "target": sender,
                 "msg_id": msg_id
             })
 
-            # Send SEEN 
+            # Send SEEN acknowledgment (displayed on screen)
             common.send_msg(sock, {
                 "type": common.MSG_SEEN,
                 "target": sender,
@@ -104,6 +124,10 @@ def receive_thread(sock, running_flag, my_username):
 
 
 def select_server_ip():
+    """
+    Displays saved contacts and allows user to select by number (1, 2, 3),
+    contact name, or enter a custom IP. Pressing Enter defaults to 127.0.0.1.
+    """
     saved = contacts.load_contacts()
     contact_items = list(saved.items())
 
@@ -115,11 +139,11 @@ def select_server_ip():
 
     choice = input("Enter server IP or contact number/name [127.0.0.1]: ").strip()
 
-   
+    # Default to 127.0.0.1 on Enter
     if not choice:
         return "127.0.0.1"
 
-    
+    # If user entered contact number (e.g. 1, 2, 3)
     if choice.isdigit():
         num = int(choice)
         if 1 <= num <= len(contact_items):
@@ -127,13 +151,13 @@ def select_server_ip():
             print(f"[*] Selected contact [{num}] {selected_name} -> {selected_ip}")
             return selected_ip
 
-    
+    # If user entered contact name (case-insensitive)
     for name, ip in contact_items:
         if name.lower() == choice.lower():
             print(f"[*] Selected contact '{name}' -> {ip}")
             return ip
 
-    
+    # Otherwise treat as direct IP or hostname
     return choice
 
 
@@ -142,17 +166,17 @@ def main():
     print("========== SECURE CHAT ==========")
     print("=" * 36)
 
-    
+    # 1. Ask for username
     username = input("Enter username: ").strip()
     while not username or " " in username:
         print("Username cannot be empty or contain spaces.")
         username = input("Enter username: ").strip()
 
-    
+    # 2. Select server IP address
     server_ip = select_server_ip()
     port = DEFAULT_PORT
 
-    
+    # 3. Create TCP socket and connect to server
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((server_ip, port))
@@ -160,7 +184,7 @@ def main():
         print(f"\n[!] Could not connect to server at {server_ip}:{port} ({e})")
         sys.exit(1)
 
-    
+    # 4. Perform Handshake / Registration
     common.send_msg(sock, {
         "type": common.MSG_REGISTER,
         "username": username
@@ -176,7 +200,7 @@ def main():
     print("\nConnected successfully!")
     print("Type /help to see all available commands.\n")
 
-    
+    # 5. Start background receiving thread
     running_flag = [True]
     recv_t = threading.Thread(
         target=receive_thread,
@@ -185,6 +209,7 @@ def main():
     )
     recv_t.start()
 
+    # 6. Main Input / Sending Loop
     try:
         while running_flag[0]:
             try:
@@ -195,20 +220,21 @@ def main():
             if not user_input:
                 continue
 
+            # Command: /help
             if user_input == "/help":
                 print_help()
 
-            
+            # Command: /quit
             elif user_input == "/quit":
                 print("\nDisconnecting...")
                 running_flag[0] = False
                 break
 
-           
+            # Command: /rooms
             elif user_input == "/rooms":
                 common.send_msg(sock, {"type": common.MSG_ROOMS})
 
-            
+            # Command: /join ROOM
             elif user_input.startswith("/join "):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2 or not parts[1].strip():
@@ -220,11 +246,11 @@ def main():
                         "room": room_name
                     })
 
-            
+            # Command: /users
             elif user_input == "/users":
                 common.send_msg(sock, {"type": common.MSG_USERS})
 
-            
+            # Command: /pm USER MESSAGE
             elif user_input.startswith("/pm "):
                 parts = user_input.split(" ", 2)
                 if len(parts) < 3:
@@ -244,7 +270,7 @@ def main():
                     print(f"[{username} -> {target_user}] Private: {pm_text}")
                     print("[STATUS] Message sent")
 
-            
+            # Command: /typing USER
             elif user_input.startswith("/typing "):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
@@ -252,7 +278,7 @@ def main():
                     continue
                 target_user = parts[1]
 
-                
+                # Anti-flooding rate limit (minimum 2 seconds between typing alerts)
                 now = time.time()
                 if target_user in last_typing_time and (now - last_typing_time[target_user]) < 2.0:
                     print(f"[!] Please wait a moment before sending another typing indicator to {target_user}.")
@@ -265,7 +291,7 @@ def main():
                 })
                 print(f"[Typing notification sent to {target_user}]")
 
-            
+            # Command: /contacts
             elif user_input == "/contacts":
                 saved = contacts.list_contacts()
                 if not saved:
@@ -276,7 +302,7 @@ def main():
                         print(f"  - {name}: {ip}")
                     print("----------------------")
 
-            
+            # Command: /contact add NAME IP
             elif user_input.startswith("/contact add "):
                 parts = user_input.split()
                 if len(parts) != 4:
@@ -285,7 +311,7 @@ def main():
                     ok, msg_text = contacts.add_contact(parts[2], parts[3])
                     print(f"[CONTACTS] {msg_text}")
 
-            
+            # Command: /contact delete NAME
             elif user_input.startswith("/contact delete "):
                 parts = user_input.split()
                 if len(parts) != 3:
@@ -294,7 +320,7 @@ def main():
                     ok, msg_text = contacts.delete_contact(parts[2])
                     print(f"[CONTACTS] {msg_text}")
 
-            
+            # Command: /contact update NAME IP
             elif user_input.startswith("/contact update "):
                 parts = user_input.split()
                 if len(parts) != 4:
@@ -303,11 +329,11 @@ def main():
                     ok, msg_text = contacts.update_contact(parts[2], parts[3])
                     print(f"[CONTACTS] {msg_text}")
 
-            
+            # Unrecognized command
             elif user_input.startswith("/"):
                 print(f"Unknown command '{user_input}'. Type /help for command list.")
 
-            
+            # Normal public group message
             else:
                 common.send_msg(sock, {
                     "type": common.MSG_GROUP,
